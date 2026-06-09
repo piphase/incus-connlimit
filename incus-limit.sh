@@ -16,6 +16,7 @@ CHAIN_V4="INCUS-LIMIT-V4"
 CHAIN_V6="INCUS-LIMIT-V6"
 STATE_DIR="/var/lib/incus-limit"
 STATE_FILE="$STATE_DIR/targets.db"
+INPUT_FD=0
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -50,8 +51,37 @@ ui_printf() {
     printf "$@" >&2
 }
 
+init_input() {
+    if [ -t 0 ]; then
+        INPUT_FD=0
+        return 0
+    fi
+
+    if [ -r /dev/tty ]; then
+        exec 3</dev/tty || {
+            error "无法打开交互终端 /dev/tty。"
+            exit 1
+        }
+        INPUT_FD=3
+        return 0
+    fi
+
+    error "当前脚本需要交互终端。通过管道执行时，请确保有可用的 /dev/tty。"
+    exit 1
+}
+
+prompt_read() {
+    local prompt=$1
+    local __var_name=$2
+    local __value
+
+    read -r -u "$INPUT_FD" -p "$prompt" __value || return 1
+    printf -v "$__var_name" '%s' "$__value"
+}
+
 pause_screen() {
-    read -r -p "按回车键继续..." _
+    local _
+    prompt_read "按回车键继续..." _ || true
 }
 
 require_root() {
@@ -206,9 +236,9 @@ prompt_for_target() {
 
         if [ "${#entries[@]}" -eq 1 ]; then
             default_choice="1"
-            read -r -p "请选择 [0-1]，直接回车默认 1: " choice
+            prompt_read "请选择 [0-1]，直接回车默认 1: " choice || return 1
         else
-            read -r -p "请选择 [0-${#entries[@]}]，直接回车默认 0: " choice
+            prompt_read "请选择 [0-${#entries[@]}]，直接回车默认 0: " choice || return 1
         fi
 
         choice=${choice:-$default_choice}
@@ -223,7 +253,7 @@ prompt_for_target() {
         fi
     fi
 
-    read -r -p "$prompt" target
+    prompt_read "$prompt" target || return 1
     printf "%s\n" "$target"
 }
 
@@ -630,7 +660,7 @@ add_target() {
     }
     [ -n "$input_target" ] || return
 
-    read -r -p "请输入单 IP 最大并发连接数 (默认 200): " limit
+    prompt_read "请输入单 IP 最大并发连接数 (默认 200): " limit || return
     limit=${limit:-200}
 
     if [[ "$input_target" == *":"* ]]; then
@@ -657,7 +687,7 @@ add_target() {
         echo "请选择网段计数方式:"
         echo "1. 每个目标 IP 单独限制 (默认)"
         echo "2. 整个网段共享一个总限制"
-        read -r -p "请选择 [1-2]，直接回车默认 1: " mode_choice
+        prompt_read "请选择 [1-2]，直接回车默认 1: " mode_choice || return
 
         case "$mode_choice" in
             2) mode="subnet-shared" ;;
@@ -695,7 +725,7 @@ remove_target() {
     local family
     local target
 
-    read -r -p "请输入要解除限制的目标 IP 或网段: " input_target
+    prompt_read "请输入要解除限制的目标 IP 或网段: " input_target || return
     [ -n "$input_target" ] || return
 
     if [[ "$input_target" == *":"* ]]; then
@@ -766,7 +796,7 @@ show_status() {
 flush_all() {
     local confirm
 
-    read -r -p "警告: 将删除所有 incus-limit 规则和状态记录。确定吗？(y/n): " confirm
+    prompt_read "警告: 将删除所有 incus-limit 规则和状态记录。确定吗？(y/n): " confirm || return
     if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
         echo "已取消。"
         pause_screen
@@ -812,7 +842,10 @@ main_menu() {
         echo "4. 一键清空并关闭所有限流"
         echo "0. 退出"
         printf "%b==========================================%b\n" "$GREEN" "$NC"
-        read -r -p "请选择操作 [0-4]: " choice
+        prompt_read "请选择操作 [0-4]: " choice || {
+            echo ""
+            exit 1
+        }
 
         case "$choice" in
             1) add_target ;;
@@ -833,6 +866,7 @@ main_menu() {
 
 require_root
 require_commands
+init_input
 ensure_state_dir
 probe_rule_support
 if ! apply_all_rules; then
