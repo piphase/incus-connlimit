@@ -37,13 +37,49 @@
   - 仅用于自动发现 Incus bridge 网段
   - 没有 `incus` 也可以手动输入目标
 
-## 本地运行
+## 最常用方式
+
+### 直接一键运行
+
+这个方式不需要先克隆仓库，但要求目标机器使用 `bash`：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/piphase/incus-connlimit/main/incus-limit.sh | sudo bash
+```
+
+说明：
+
+- 这个脚本是交互式的
+- 当前版本已经兼容 `curl ... | sudo bash` 这种临时执行方式
+- 不建议再使用 `sudo bash <(curl ...)`，有些环境下会遇到 `/dev/fd/*` 问题
+
+## 其他使用方式
+
+### 克隆后安装
+
+```bash
+git clone https://github.com/piphase/incus-connlimit.git
+cd incus-connlimit
+sudo ./install.sh
+sudo incus-limit
+```
+
+### 直接安装到 `/usr/local/sbin`
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/piphase/incus-connlimit/main/incus-limit.sh -o /tmp/incus-limit.sh
+sudo install -m 0755 /tmp/incus-limit.sh /usr/local/sbin/incus-limit
+rm -f /tmp/incus-limit.sh
+sudo incus-limit
+```
+
+### 本地运行
 
 ```bash
 sudo ./incus-limit.sh
 ```
 
-## 安装到系统
+### 安装脚本
 
 ```bash
 sudo ./install.sh
@@ -61,38 +97,4 @@ sudo incus-limit
 sudo ./uninstall.sh
 ```
 
-## GitHub 使用方式
-
-### 方式 1：克隆后安装
-
-```bash
-git clone https://github.com/piphase/incus-connlimit.git
-cd incus-connlimit
-sudo ./install.sh
-sudo incus-limit
-```
-
-### 方式 2：直接一键运行
-
-这个方式不需要先克隆仓库，但要求目标机器使用 `bash`：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/piphase/incus-connlimit/main/incus-limit.sh | sudo bash
-```
-
-说明：
-
-- 这个脚本是交互式的
-- 当前版本已经兼容 `curl ... | sudo bash` 这种临时执行方式
-- 不建议再使用 `sudo bash <(curl ...)`，有些环境下会遇到 `/dev/fd/*` 问题
-
-### 方式 3：直接安装到 `/usr/local/sbin`
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/piphase/incus-connlimit/main/incus-limit.sh -o /tmp/incus-limit.sh
-sudo install -m 0755 /tmp/incus-limit.sh /usr/local/sbin/incus-limit
-rm -f /tmp/incus-limit.sh
-sudo incus-limit
-```
-
-如果只是临时调整规则，通常更推荐方式 2，不必额外安装。
+如果只是临时调整规则，通常更推荐最上面的“一键运行”，不必额外安装。
