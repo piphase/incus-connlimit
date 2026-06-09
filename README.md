@@ -39,17 +39,9 @@
 
 ### 一键运行
 
-这个方式不需要先克隆仓库，但要求目标机器使用 `bash`：
-
 ```bash
 curl -fsSL https://raw.githubusercontent.com/piphase/incus-connlimit/main/incus-limit.sh | sudo bash
 ```
-
-说明：
-
-- 这个脚本是交互式的
-- 当前版本已经兼容 `curl ... | sudo bash` 这种临时执行方式
-- 不建议再使用 `sudo bash <(curl ...)`，有些环境下会遇到 `/dev/fd/*` 问题
 
 ## 其他使用方式
 
@@ -95,4 +87,3 @@ sudo incus-limit
 sudo ./uninstall.sh
 ```
 
-如果只是临时调整规则，通常更推荐最上面的“一键运行”，不必额外安装。
