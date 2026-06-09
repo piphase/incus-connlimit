@@ -21,6 +21,8 @@
 - 一旦目标超限，命中目标的现有连接和新连接都可能继续被丢包
 - 建议先从较高阈值开始，例如 `500`
 - 运行前请确认你理解 `每个目标 IP 单独限制` 和 `整个网段共享一个总限制` 的区别
+- 运行一次后，规则会写入当前内核的 `iptables/ip6tables`
+- 脚本退出后规则仍然保留，直到你手动删除、重启后未恢复、或被别的防火墙管理工具覆盖
 
 ## 依赖
 
@@ -78,6 +80,19 @@ sudo incus-limit
 curl -fsSL https://raw.githubusercontent.com/piphase/incus-connlimit/main/incus-limit.sh | sudo bash
 ```
 
+说明：
+
+- 这个脚本是交互式的
+- 当前版本已经兼容 `curl ... | sudo bash` 这种临时执行方式
+- 不建议再使用 `sudo bash <(curl ...)`，有些环境下会遇到 `/dev/fd/*` 问题
+
+如果你的机器访问 GitHub 需要代理，可以这样执行：
+
+```bash
+HTTPS_PROXY=http://127.0.0.1:10808 HTTP_PROXY=http://127.0.0.1:10808 ALL_PROXY=http://127.0.0.1:10808 \
+curl -fsSL https://raw.githubusercontent.com/piphase/incus-connlimit/main/incus-limit.sh | sudo bash
+```
+
 ### 方式 3：直接安装到 `/usr/local/sbin`
 
 ```bash
@@ -86,6 +101,8 @@ sudo install -m 0755 /tmp/incus-limit.sh /usr/local/sbin/incus-limit
 rm -f /tmp/incus-limit.sh
 sudo incus-limit
 ```
+
+如果只是临时调整规则，通常更推荐方式 2，不必额外安装。
 
 ## 推到 GitHub
 
