@@ -86,13 +86,6 @@ curl -fsSL https://raw.githubusercontent.com/piphase/incus-connlimit/main/incus-
 - 当前版本已经兼容 `curl ... | sudo bash` 这种临时执行方式
 - 不建议再使用 `sudo bash <(curl ...)`，有些环境下会遇到 `/dev/fd/*` 问题
 
-如果你的机器访问 GitHub 需要代理，可以这样执行：
-
-```bash
-HTTPS_PROXY=http://127.0.0.1:10808 HTTP_PROXY=http://127.0.0.1:10808 ALL_PROXY=http://127.0.0.1:10808 \
-curl -fsSL https://raw.githubusercontent.com/piphase/incus-connlimit/main/incus-limit.sh | sudo bash
-```
-
 ### 方式 3：直接安装到 `/usr/local/sbin`
 
 ```bash
@@ -103,24 +96,3 @@ sudo incus-limit
 ```
 
 如果只是临时调整规则，通常更推荐方式 2，不必额外安装。
-
-## 推到 GitHub
-
-当前目录还不是 Git 仓库。你可以在这里直接执行：
-
-```bash
-git init -b main
-git add .
-git commit -m "Initial commit"
-git remote add origin git@github.com:piphase/incus-connlimit.git
-git push -u origin main
-```
-
-如果你用 GitHub CLI：
-
-```bash
-git init -b main
-git add .
-git commit -m "Initial commit"
-gh repo create incus-connlimit --public --source=. --remote=origin --push
-```
