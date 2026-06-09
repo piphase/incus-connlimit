@@ -2,11 +2,13 @@
 
 交互式 Incus 转发流量并发连接限制脚本。
 
-这个脚本主要面向 `Incus proxy nat=true` 这类场景，用 `iptables/ip6tables` 的 `connlimit` 做目标地址维度的连接数限制。
+这个脚本主要面向 `Incus proxy nat=true` 这类场景，用 `iptables/ip6tables` 的 `conntrack + connlimit` 做后端容器地址维度的连接数限制。
 
 ## 功能
 
 - 支持 IPv4 和 IPv6
+- 支持 `TCP`、`UDP`、`TCP+UDP` 三种协议模式
+- 针对 `Incus proxy nat=true`，按 conntrack reply 方向中的后端容器地址匹配
 - 默认按目标地址总量限制
 - 输入网段时可选：
   - 网段内每个 IP 单独限制
@@ -19,6 +21,8 @@
 
 - 这个脚本使用的是原始 `connlimit` 语义
 - 一旦目标超限，命中目标的现有连接和新连接都可能继续被丢包
+- 默认更推荐只限制 `TCP`
+- `UDP` 也能限制，但本质上限制的是 conntrack 项，表现会和 `TCP` 不一样
 - 建议先从较高阈值开始，例如 `500`
 - 运行前请确认你理解 `每个目标 IP 单独限制` 和 `整个网段共享一个总限制` 的区别
 - 运行一次后，规则会写入当前内核的 `iptables/ip6tables`

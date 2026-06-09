@@ -7,7 +7,8 @@ set -o pipefail
 # incus-limit - 交互式 Incus 转发流量并发连接限制工具
 # 说明:
 # 1. 使用原始 connlimit 语义，超过阈值后现有连接也会受影响
-# 2. 默认按目标地址总量限制；输入网段时可选“每个 IP 单独”或“整个网段共享”
+# 2. 针对 Incus proxy nat=true，按 conntrack reply 方向中的后端容器地址匹配
+# 3. 默认按目标地址总量限制；输入网段时可选“每个 IP 单独”或“整个网段共享”
 # 3. 每个目标 IP/网段独立设置阈值
 # 4. 仅管理 FORWARD 链中的自有规则
 # ====================================================
@@ -313,6 +314,34 @@ mode_label() {
     esac
 }
 
+protocol_label() {
+    local protocol=$1
+
+    case "$protocol" in
+        tcp) printf "TCP" ;;
+        udp) printf "UDP" ;;
+        *) printf "TCP+UDP" ;;
+    esac
+}
+
+normalize_protocol() {
+    case "${1:-all}" in
+        tcp|udp|all) printf "%s\n" "${1:-all}" ;;
+        *) printf "all\n" ;;
+    esac
+}
+
+protocol_rule_args() {
+    local protocol
+    protocol=$(normalize_protocol "${1:-all}")
+
+    case "$protocol" in
+        tcp) printf -- "-p tcp" ;;
+        udp) printf -- "-p udp" ;;
+        *) printf -- "" ;;
+    esac
+}
+
 normalize_mode() {
     local family=$1
     local target=$2
@@ -375,16 +404,18 @@ validate_target() {
 
 probe_rule_support() {
     local tmp_chain
+    local protocol_args
 
     tmp_chain="ILPROBE4_$$_$RANDOM"
     if ! ipt4 -N "$tmp_chain" >/dev/null 2>&1; then
         error "无法创建临时 IPv4 链，请检查 iptables 是否可用。"
         exit 1
     fi
-    if ! ipt4 -A "$tmp_chain" -m connlimit --connlimit-daddr --connlimit-above 1 --connlimit-mask 32 -j DROP >/dev/null 2>&1; then
+    protocol_args=$(protocol_rule_args "tcp")
+    if ! ipt4 -A "$tmp_chain" -m conntrack --ctdir REPLY -s 127.0.0.1/32 ${protocol_args} -m connlimit --connlimit-saddr --connlimit-above 1 --connlimit-mask 32 -j DROP >/dev/null 2>&1; then
         ipt4 -F "$tmp_chain" >/dev/null 2>&1 || true
         ipt4 -X "$tmp_chain" >/dev/null 2>&1 || true
-        error "当前 IPv4 防火墙后端不支持 connlimit/DROP 组合规则。"
+        error "当前 IPv4 防火墙后端不支持 conntrack/connlimit/DROP 组合规则。"
         exit 1
     fi
     ipt4 -F "$tmp_chain" >/dev/null 2>&1 || true
@@ -395,10 +426,10 @@ probe_rule_support() {
         error "无法创建临时 IPv6 链，请检查 ip6tables 是否可用。"
         exit 1
     fi
-    if ! ipt6 -A "$tmp_chain" -m connlimit --connlimit-daddr --connlimit-above 1 --connlimit-mask 128 -j DROP >/dev/null 2>&1; then
+    if ! ipt6 -A "$tmp_chain" -m conntrack --ctdir REPLY -s ::1/128 ${protocol_args} -m connlimit --connlimit-saddr --connlimit-above 1 --connlimit-mask 128 -j DROP >/dev/null 2>&1; then
         ipt6 -F "$tmp_chain" >/dev/null 2>&1 || true
         ipt6 -X "$tmp_chain" >/dev/null 2>&1 || true
-        error "当前 IPv6 防火墙后端不支持 connlimit/DROP 组合规则。"
+        error "当前 IPv6 防火墙后端不支持 conntrack/connlimit/DROP 组合规则。"
         exit 1
     fi
     ipt6 -F "$tmp_chain" >/dev/null 2>&1 || true
@@ -435,13 +466,30 @@ get_state_mode() {
     ' "$STATE_FILE"
 }
 
+get_state_protocol() {
+    local family=$1
+    local target=$2
+
+    awk -F'|' -v family="$family" -v target="$target" '
+        $1 == family && $2 == target {
+            if (NF >= 5 && $5 != "") {
+                print $5
+            } else {
+                print "all"
+            }
+            exit
+        }
+    ' "$STATE_FILE"
+}
+
 list_family_targets() {
     local family=$1
 
     awk -F'|' -v family="$family" '
         $1 == family && NF >= 3 {
             mode = (NF >= 4 && $4 != "") ? $4 : "per-ip"
-            print $2 "|" $3 "|" mode
+            protocol = (NF >= 5 && $5 != "") ? $5 : "all"
+            print $2 "|" $3 "|" mode "|" protocol
         }
     ' "$STATE_FILE"
 }
@@ -451,15 +499,16 @@ upsert_state_entry() {
     local target=$2
     local limit=$3
     local mode=${4:-per-ip}
+    local protocol=${5:-all}
     local tmp_file
 
     tmp_file=$(mktemp "$STATE_DIR/targets.XXXXXX") || return 1
-    awk -F'|' -v family="$family" -v target="$target" -v limit="$limit" -v mode="$mode" '
+    awk -F'|' -v family="$family" -v target="$target" -v limit="$limit" -v mode="$mode" -v protocol="$protocol" '
         BEGIN { updated = 0 }
         NF < 3 { next }
         $1 == family && $2 == target {
             if (!updated) {
-                print family "|" target "|" limit "|" mode
+                print family "|" target "|" limit "|" mode "|" protocol
                 updated = 1
             }
             next
@@ -467,7 +516,7 @@ upsert_state_entry() {
         { print $0 }
         END {
             if (!updated) {
-                print family "|" target "|" limit "|" mode
+                print family "|" target "|" limit "|" mode "|" protocol
             }
         }
     ' "$STATE_FILE" > "$tmp_file" || {
@@ -560,7 +609,9 @@ apply_family_v4() {
     local target
     local limit
     local mode
+    local protocol
     local mask
+    local rule_args
 
     if ! state_has_family "v4"; then
         cleanup_family_v4
@@ -577,10 +628,15 @@ apply_family_v4() {
         target=${entry%%|*}
         limit=${entry#*|}
         limit=${limit%%|*}
-        mode=${entry##*|}
+        mode=${entry#*|}
+        mode=${mode#*|}
+        mode=${mode%%|*}
+        protocol=${entry##*|}
         mask=$(connlimit_mask_for_target "v4" "$target" "$mode")
         validate_mask_for_family "v4" "$mask" || return 1
-        ipt4 -A "$CHAIN_V4" -d "$target" -m connlimit --connlimit-daddr --connlimit-above "$limit" --connlimit-mask "$mask" -m comment --comment "incus-limit:$target:$limit:$mode" -j DROP >/dev/null 2>&1 || return 1
+        protocol=$(normalize_protocol "$protocol")
+        rule_args=$(protocol_rule_args "$protocol")
+        ipt4 -A "$CHAIN_V4" -m conntrack --ctdir REPLY -s "$target" ${rule_args} -m connlimit --connlimit-saddr --connlimit-above "$limit" --connlimit-mask "$mask" -m comment --comment "incus-limit:$target:$limit:$mode:$protocol" -j DROP >/dev/null 2>&1 || return 1
     done < <(list_family_targets "v4")
 
     ipt4 -A "$CHAIN_V4" -j RETURN >/dev/null 2>&1 || return 1
@@ -591,7 +647,9 @@ apply_family_v6() {
     local target
     local limit
     local mode
+    local protocol
     local mask
+    local rule_args
 
     if ! state_has_family "v6"; then
         cleanup_family_v6
@@ -608,10 +666,15 @@ apply_family_v6() {
         target=${entry%%|*}
         limit=${entry#*|}
         limit=${limit%%|*}
-        mode=${entry##*|}
+        mode=${entry#*|}
+        mode=${mode#*|}
+        mode=${mode%%|*}
+        protocol=${entry##*|}
         mask=$(connlimit_mask_for_target "v6" "$target" "$mode")
         validate_mask_for_family "v6" "$mask" || return 1
-        ipt6 -A "$CHAIN_V6" -d "$target" -m connlimit --connlimit-daddr --connlimit-above "$limit" --connlimit-mask "$mask" -m comment --comment "incus-limit:$target:$limit:$mode" -j DROP >/dev/null 2>&1 || return 1
+        protocol=$(normalize_protocol "$protocol")
+        rule_args=$(protocol_rule_args "$protocol")
+        ipt6 -A "$CHAIN_V6" -m conntrack --ctdir REPLY -s "$target" ${rule_args} -m connlimit --connlimit-saddr --connlimit-above "$limit" --connlimit-mask "$mask" -m comment --comment "incus-limit:$target:$limit:$mode:$protocol" -j DROP >/dev/null 2>&1 || return 1
     done < <(list_family_targets "v6")
 
     ipt6 -A "$CHAIN_V6" -j RETURN >/dev/null 2>&1 || return 1
@@ -651,8 +714,11 @@ add_target() {
     local limit
     local old_limit
     local old_mode
+    local old_protocol
     local mode="per-ip"
     local mode_choice
+    local protocol="tcp"
+    local protocol_choice
 
     input_target=$(prompt_for_target "请输入要限制的目标 IP 或网段 (例如 10.10.2.202 或 10.10.0.0/22): ") || {
         pause_screen
@@ -683,6 +749,23 @@ add_target() {
         return
     fi
 
+    echo "请选择要限制的协议:"
+    echo "1. 仅 TCP (默认)"
+    echo "2. 仅 UDP"
+    echo "3. TCP + UDP"
+    prompt_read "请选择 [1-3]，直接回车默认 1: " protocol_choice || return
+
+    case "$protocol_choice" in
+        2) protocol="udp" ;;
+        3) protocol="all" ;;
+        ""|1) protocol="tcp" ;;
+        *)
+            error "无效选项。"
+            pause_screen
+            return
+            ;;
+    esac
+
     if ! is_host_target "$family" "$target"; then
         echo "请选择网段计数方式:"
         echo "1. 每个目标 IP 单独限制 (默认)"
@@ -701,20 +784,22 @@ add_target() {
     fi
 
     mode=$(normalize_mode "$family" "$target" "$mode")
+    protocol=$(normalize_protocol "$protocol")
     old_limit=$(get_state_limit "$family" "$target")
     old_mode=$(get_state_mode "$family" "$target")
-    if ! commit_state_change upsert_state_entry "$family" "$target" "$limit" "$mode"; then
+    old_protocol=$(get_state_protocol "$family" "$target")
+    if ! commit_state_change upsert_state_entry "$family" "$target" "$limit" "$mode" "$protocol"; then
         error "保存配置或应用规则失败，已回滚到变更前状态。"
         pause_screen
         return
     fi
 
-    if [ -n "$old_limit" ] && { [ "$old_limit" != "$limit" ] || [ "$old_mode" != "$mode" ]; }; then
-        info "已更新 $target 的限制: limit $old_limit -> $limit，模式 $(mode_label "$old_mode") -> $(mode_label "$mode")"
+    if [ -n "$old_limit" ] && { [ "$old_limit" != "$limit" ] || [ "$old_mode" != "$mode" ] || [ "$old_protocol" != "$protocol" ]; }; then
+        info "已更新 $target 的限制: limit $old_limit -> $limit，模式 $(mode_label "$old_mode") -> $(mode_label "$mode")，协议 $(protocol_label "$old_protocol") -> $(protocol_label "$protocol")"
     elif [ -n "$old_limit" ]; then
-        warn "目标 $target 已存在，限制保持为 $limit，模式为 $(mode_label "$mode")。"
+        warn "目标 $target 已存在，限制保持为 $limit，模式为 $(mode_label "$mode")，协议为 $(protocol_label "$protocol")。"
     else
-        info "已添加 $target，最大并发连接数为 $limit，模式为 $(mode_label "$mode")。"
+        info "已添加 $target，最大并发连接数为 $limit，模式为 $(mode_label "$mode")，协议为 $(protocol_label "$protocol")。"
     fi
 
     pause_screen
@@ -761,6 +846,7 @@ print_state_section() {
     local target
     local limit
     local mode
+    local protocol
     local mask
 
     printf "\n%b=== %s ===%b\n" "$YELLOW" "$title" "$NC"
@@ -770,9 +856,12 @@ print_state_section() {
         target=${entry%%|*}
         limit=${entry#*|}
         limit=${limit%%|*}
-        mode=${entry##*|}
+        mode=${entry#*|}
+        mode=${mode#*|}
+        mode=${mode%%|*}
+        protocol=${entry##*|}
         mask=$(connlimit_mask_for_target "$family" "$target" "$mode")
-        printf "%s  %-32s limit=%s  mode=%s  mask=%s\n" "$label" "$target" "$limit" "$(mode_label "$mode")" "$mask"
+        printf "%s  %-32s limit=%s  mode=%s  protocol=%s  mask=%s\n" "$label" "$target" "$limit" "$(mode_label "$mode")" "$(protocol_label "$protocol")" "$mask"
     done < <(list_family_targets "$family")
 
     if [ "$found" -eq 0 ]; then
@@ -789,7 +878,7 @@ show_status() {
     printf "\n%b=== IPv6 实时计数链 ===%b\n" "$YELLOW" "$NC"
     ip6tables -nvL "$CHAIN_V6" --line-numbers 2>/dev/null || echo "未启用"
 
-    printf "\n说明: 当前脚本使用原始 connlimit 语义，默认按目标地址总量限制；会优先列出自动发现的 Incus 内网段，网段可选“每个目标 IP 单独”或“整个网段共享”。目标超限后，命中该目标的现有连接和新连接都可能继续被丢包。\n\n"
+    printf "\n说明: 当前脚本使用原始 connlimit 语义，并针对 Incus proxy nat=true 按 conntrack reply 方向中的后端容器地址匹配。默认限制 TCP，可选 UDP 或 TCP+UDP。目标超限后，命中该目标的现有连接和新连接都可能继续被丢包。\n\n"
     pause_screen
 }
 
