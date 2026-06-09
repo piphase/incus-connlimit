@@ -75,13 +75,15 @@ sudo incus-limit
 这个方式不需要先克隆仓库，但要求目标机器使用 `bash`：
 
 ```bash
-sudo bash <(curl -fsSL https://raw.githubusercontent.com/piphase/incus-connlimit/main/incus-limit.sh)
+curl -fsSL https://raw.githubusercontent.com/piphase/incus-connlimit/main/incus-limit.sh | sudo bash
 ```
 
 ### 方式 3：直接安装到 `/usr/local/sbin`
 
 ```bash
-sudo install -m 0755 <(curl -fsSL https://raw.githubusercontent.com/piphase/incus-connlimit/main/incus-limit.sh) /usr/local/sbin/incus-limit
+curl -fsSL https://raw.githubusercontent.com/piphase/incus-connlimit/main/incus-limit.sh -o /tmp/incus-limit.sh
+sudo install -m 0755 /tmp/incus-limit.sh /usr/local/sbin/incus-limit
+rm -f /tmp/incus-limit.sh
 sudo incus-limit
 ```
 
